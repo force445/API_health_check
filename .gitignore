@@ -1,0 +1,18 @@
+# python
+env/
+*.pyc
+**__pycache__/
+
+# js
+**node_modules/
+**package-lock.json
+
+.DS_Store
+.vscode/
+.codex
+
+# django
+*.sqlite3
+.env
+celerybeat-schedule
+

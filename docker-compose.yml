@@ -1,0 +1,51 @@
+volumes:
+    media: {}
+    static: {}
+    db: {}
+    redis_db: {}
+
+services: 
+    db:
+        container_name: ${PROJECT_NAME}-db
+        image: postgres:16.3-alpine
+        volumes:
+          - db:/var/lib/postgresql/data
+        env_file:
+            - .env
+
+    redis:
+        container_name: ${PROJECT_NAME}-redis
+        image: redis:7.2-alpine
+        volumes:
+            - redis_db:/data
+
+    backend:
+        container_name: ${PROJECT_NAME}-backend
+        build: ./backend
+        command: sh runserver-dev.sh
+        volumes: 
+            - ./backend:/backend
+            - media:/var/www/media/
+            - static:/var/www/static/
+        ports: 
+            - 8000:8000
+        env_file: 
+            - .env
+
+    celery:
+        container_name: ${PROJECT_NAME}-celery_worker
+        build: ./backend
+        command: celery -A backend worker --loglevel=info
+        volumes:
+            - ./backend:/backend
+        env_file: 
+            - .env
+
+    celery-beat:
+        container_name: ${PROJECT_NAME}-celery_beat
+        build: ./backend
+        command: celery -A backend beat --loglevel=info
+        volumes:
+            - ./backend:/backend
+        env_file: 
+            - .env
