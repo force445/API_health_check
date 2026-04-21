@@ -8,6 +8,7 @@ services:
     db:
         container_name: ${PROJECT_NAME}-db
         image: postgres:16.3-alpine
+        restart: always
         volumes:
           - db:/var/lib/postgresql/data
         env_file:
@@ -16,6 +17,7 @@ services:
     redis:
         container_name: ${PROJECT_NAME}-redis
         image: redis:7.2-alpine
+        restart: always
         volumes:
             - redis_db:/data
 
@@ -23,6 +25,7 @@ services:
         container_name: ${PROJECT_NAME}-backend
         build: ./backend
         command: sh runserver-dev.sh
+        restart: always
         volumes: 
             - ./backend:/backend
             - media:/var/www/media/
@@ -36,6 +39,7 @@ services:
         container_name: ${PROJECT_NAME}-celery_worker
         build: ./backend
         command: celery -A backend worker --loglevel=info
+        restart: always
         volumes:
             - ./backend:/backend
         env_file: 
@@ -45,6 +49,7 @@ services:
         container_name: ${PROJECT_NAME}-celery_beat
         build: ./backend
         command: celery -A backend beat --loglevel=info
+        restart: always
         volumes:
             - ./backend:/backend
         env_file: 
