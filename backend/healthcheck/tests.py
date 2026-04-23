@@ -1,4 +1,5 @@
 import os
+from datetime import timedelta
 from unittest.mock import Mock, patch
 
 import requests
@@ -6,7 +7,7 @@ from django.test import TestCase
 from django.urls import reverse
 from django.utils import timezone
 
-from .models import Project, URL
+from .models import HealthCheckResult, Project, URL
 from .tasks import check_all_urls_health
 
 
@@ -21,6 +22,21 @@ class HealthcheckModelTests(TestCase):
         url = URL.objects.create(project=project, name="Primary", url="https://example.com")
 
         self.assertEqual(str(url), "Payments Primary")
+
+    def test_health_check_result_string_representation(self):
+        project = Project.objects.create(name="Payments")
+        url = URL.objects.create(project=project, name="Primary", url="https://example.com")
+        checked_at = timezone.now()
+        result = HealthCheckResult.objects.create(
+            url=url,
+            checked_at=checked_at,
+            is_healthy=True,
+            status_code=200,
+            response_time_ms=123,
+            log="ok",
+        )
+
+        self.assertEqual(str(result), f"Payments Primary @ {checked_at.isoformat()} | True")
 
 
 class DashboardViewTests(TestCase):
@@ -53,15 +69,55 @@ class DashboardViewTests(TestCase):
             url="https://disabled.example.com",
             is_healthy=True,
         )
+        now = timezone.now()
+        HealthCheckResult.objects.create(
+            url=self.url_a_healthy,
+            checked_at=now - timedelta(hours=2),
+            is_healthy=True,
+            status_code=200,
+            response_time_ms=100,
+            log="ok",
+        )
+        HealthCheckResult.objects.create(
+            url=self.url_a_healthy,
+            checked_at=now - timedelta(hours=1),
+            is_healthy=False,
+            status_code=500,
+            response_time_ms=200,
+            log="down",
+        )
+        HealthCheckResult.objects.create(
+            url=self.url_a_healthy,
+            checked_at=now - timedelta(days=2),
+            is_healthy=True,
+            status_code=200,
+            response_time_ms=95,
+            log="ok",
+        )
+        HealthCheckResult.objects.create(
+            url=self.url_a_unhealthy,
+            checked_at=now - timedelta(hours=3),
+            is_healthy=False,
+            status_code=503,
+            response_time_ms=250,
+            log="maintenance",
+        )
+        HealthCheckResult.objects.create(
+            url=self.url_b,
+            checked_at=now - timedelta(days=8),
+            is_healthy=True,
+            status_code=200,
+            response_time_ms=110,
+            log="ok",
+        )
 
     def test_dashboard_excludes_urls_from_disabled_projects(self):
         response = self.client.get(reverse("dashboard"))
 
         self.assertEqual(response.status_code, 200)
-        self.assertQuerySetEqual(
-            response.context["urls"].order_by("id"),
-            URL.objects.filter(project__is_use=True).order_by("id"),
-            transform=lambda item: item,
+        self.assertEqual(
+            response.context["urls"],
+            list(URL.objects.filter(project__is_use=True).order_by("project__name", "name")),
         )
         self.assertNotContains(response, "Disabled URL")
 
@@ -94,6 +150,26 @@ class DashboardViewTests(TestCase):
             ],
         )
 
+    def test_dashboard_adds_uptime_percentages_from_history(self):
+        response = self.client.get(reverse("dashboard"))
+
+        urls_by_name = {url.name: url for url in response.context["urls"]}
+        self.assertEqual(urls_by_name["Healthy URL"].uptime_24h, 50.0)
+        self.assertEqual(urls_by_name["Healthy URL"].uptime_7d, 66.7)
+        self.assertEqual(urls_by_name["Unhealthy URL"].uptime_24h, 0.0)
+        self.assertEqual(urls_by_name["Project B URL"].uptime_24h, None)
+        self.assertEqual(urls_by_name["Project B URL"].uptime_7d, None)
+
+    def test_dashboard_exposes_recent_incidents(self):
+        response = self.client.get(reverse("dashboard"))
+
+        recent_incidents = list(response.context["recent_incidents"])
+        self.assertEqual(len(recent_incidents), 2)
+        self.assertEqual(recent_incidents[0].url, self.url_a_healthy)
+        self.assertEqual(recent_incidents[1].url, self.url_a_unhealthy)
+        self.assertEqual(response.context["current_unhealthy_count"], 1)
+        self.assertEqual(response.context["recent_incident_count"], 2)
+
 
 class CheckAllUrlsHealthTaskTests(TestCase):
     def setUp(self):
@@ -114,9 +190,14 @@ class CheckAllUrlsHealthTaskTests(TestCase):
         check_all_urls_health()
 
         self.url.refresh_from_db()
+        result = HealthCheckResult.objects.get(url=self.url)
         self.assertTrue(self.url.is_healthy)
         self.assertEqual(self.url.log, "ok")
         self.assertIsNotNone(self.url.last_checked)
+        self.assertTrue(result.is_healthy)
+        self.assertEqual(result.status_code, 200)
+        self.assertEqual(result.log, "ok")
+        self.assertIsNotNone(result.response_time_ms)
         mock_post.assert_not_called()
 
     @patch.dict(os.environ, {"CHAT_HOOK_URL": "https://chat.example.com/hook"}, clear=False)
@@ -128,7 +209,10 @@ class CheckAllUrlsHealthTaskTests(TestCase):
         check_all_urls_health()
 
         self.url.refresh_from_db()
+        result = HealthCheckResult.objects.get(url=self.url)
         self.assertFalse(self.url.is_healthy)
+        self.assertFalse(result.is_healthy)
+        self.assertEqual(result.status_code, 503)
         mock_post.assert_called_once()
         _, kwargs = mock_post.call_args
         self.assertEqual(kwargs["headers"], {"Content-Type": "application/json"})
@@ -146,9 +230,13 @@ class CheckAllUrlsHealthTaskTests(TestCase):
         check_all_urls_health()
 
         self.url.refresh_from_db()
+        result = HealthCheckResult.objects.get(url=self.url)
         self.assertFalse(self.url.is_healthy)
         self.assertEqual(self.url.log, "timed out")
         self.assertIsNotNone(self.url.last_checked)
+        self.assertFalse(result.is_healthy)
+        self.assertIsNone(result.status_code)
+        self.assertIsNone(result.response_time_ms)
         mock_post.assert_called_once()
         self.assertIn("log : timed out", mock_post.call_args.kwargs["json"]["text"])
 
@@ -163,6 +251,7 @@ class CheckAllUrlsHealthTaskTests(TestCase):
 
         self.url.refresh_from_db()
         self.assertFalse(self.url.is_healthy)
+        self.assertEqual(HealthCheckResult.objects.filter(url=self.url).count(), 1)
         mock_post.assert_not_called()
 
     @patch("healthcheck.tasks.requests.get")
@@ -193,4 +282,5 @@ class CheckAllUrlsHealthTaskTests(TestCase):
         self.assertIsNotNone(self.url.last_checked)
         self.assertEqual(disabled_url.last_checked, previous_disabled_url_checked)
         self.assertEqual(project_url.last_checked, previous_project_url_checked)
+        self.assertEqual(HealthCheckResult.objects.count(), 1)
         mock_get.assert_called_once_with(self.url.url, timeout=10, verify=False)

@@ -1,32 +1,51 @@
+from datetime import timedelta
+
 from django.shortcuts import render
+from django.utils import timezone
+
 from . import models
-from django.db.models import Count, Q
-# Create your views here.
+
+
+def _calculate_uptime(results):
+    total_checks = len(results)
+    if total_checks == 0:
+        return None
+
+    healthy_checks = sum(1 for result in results if result.is_healthy)
+    return round((healthy_checks / total_checks) * 100, 1)
+
 
 def dashboard_view(request):
-# Get filter parameters from the request
     project_id = request.GET.get('project')
     is_healthy = request.GET.get('is_healthy')
+    now = timezone.now()
+    last_24_hours = now - timedelta(hours=24)
+    last_7_days = now - timedelta(days=7)
 
-    # Filter URLs by project and is_healthy status
-    urls = models.URL.objects.filter(project__is_use=True)
+    active_urls = list(
+        models.URL.objects.filter(project__is_use=True)
+        .select_related("project")
+        .prefetch_related("health_check_results")
+        .order_by("project__name", "name")
+    )
+
+    urls = list(active_urls)
 
     if project_id:
-        urls = urls.filter(project__id=project_id)
-    
+        urls = [url for url in urls if str(url.project_id) == project_id]
+
     if is_healthy:
         is_healthy_bool = True if is_healthy == 'true' else False
-        urls = urls.filter(is_healthy=is_healthy_bool)
-    
-    # Fetch projects for filter dropdown
+        urls = [url for url in urls if url.is_healthy == is_healthy_bool]
+
     projects = models.Project.objects.filter(is_use=True)
 
-    # Count healthy and unhealthy URLs per project for the chart
     project_health_data = []
     for project in projects:
-        total_urls = project.url_set.count()
+        project_urls = [url for url in active_urls if url.project_id == project.id]
+        total_urls = len(project_urls)
         if total_urls > 0:
-            healthy_count = project.url_set.filter(is_healthy=True).count()
+            healthy_count = sum(1 for url in project_urls if url.is_healthy)
             unhealthy_count = total_urls - healthy_count
             healthy_percentage = (healthy_count / total_urls) * 100
             unhealthy_percentage = (unhealthy_count / total_urls) * 100
@@ -40,12 +59,34 @@ def dashboard_view(request):
             'unhealthy_percentage': unhealthy_percentage
         })
 
+    for url in urls:
+        history = list(url.health_check_results.all())
+        recent_24h = [result for result in history if result.checked_at >= last_24_hours]
+        recent_7d = [result for result in history if result.checked_at >= last_7_days]
+        url.uptime_24h = _calculate_uptime(recent_24h)
+        url.uptime_7d = _calculate_uptime(recent_7d)
+        url.uptime_24h_display = "No data" if url.uptime_24h is None else f"{url.uptime_24h}%"
+        url.uptime_7d_display = "No data" if url.uptime_7d is None else f"{url.uptime_7d}%"
+        url.last_incident = next((result for result in history if not result.is_healthy), None)
+
+    recent_incidents_query = models.HealthCheckResult.objects.filter(
+        url__project__is_use=True,
+        is_healthy=False,
+    )
+    if project_id:
+        recent_incidents_query = recent_incidents_query.filter(url__project_id=project_id)
+    recent_incidents = recent_incidents_query.select_related("url", "url__project")[:10]
+
     context = {
         'urls': urls,
         'projects': projects,
         'selected_project': project_id,
         'selected_health': is_healthy,
         'project_health_data': project_health_data,
+        'recent_incidents': recent_incidents,
+        'tracked_services_count': len(urls),
+        'current_unhealthy_count': sum(1 for url in urls if not url.is_healthy),
+        'recent_incident_count': recent_incidents_query.count(),
     }
 
     return render(request, 'healthcheck/dashboard.html', context)

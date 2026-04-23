@@ -10,19 +10,127 @@
     <script src="{% static "js/uikit.min.js" %}"></script>
     <script src="{% static "js/uikit-icons.min.js" %}"></script>
     <script src="{% static "js/chart.js" %}"></script>
+    <style>
+        :root {
+            --page-background: linear-gradient(180deg, #f4f7fb 0%, #e8eef7 100%);
+            --surface-background: rgba(255, 255, 255, 0.9);
+            --surface-border: rgba(148, 163, 184, 0.24);
+            --text-color: #1f2937;
+            --muted-text-color: #5b6472;
+            --table-stripe: rgba(15, 23, 42, 0.03);
+        }
+
+        body.dark-mode {
+            --page-background: radial-gradient(circle at top, #1f3042 0%, #101826 48%, #090d14 100%);
+            --surface-background: rgba(15, 23, 42, 0.88);
+            --surface-border: rgba(148, 163, 184, 0.18);
+            --text-color: #e5edf7;
+            --muted-text-color: #9ca9bd;
+            --table-stripe: rgba(148, 163, 184, 0.06);
+        }
+
+        body {
+            min-height: 100vh;
+            margin: 0;
+            background: var(--page-background);
+            color: var(--text-color);
+            transition: background 0.25s ease, color 0.25s ease;
+        }
+
+        .uk-container {
+            padding-top: 32px;
+            padding-bottom: 48px;
+        }
+
+        h1, h2, th, td, p, a, label, span, option, select, button {
+            color: var(--text-color);
+        }
+
+        .uk-text-meta,
+        .uk-text-muted {
+            color: var(--muted-text-color) !important;
+        }
+
+        .uk-card,
+        .uk-table,
+        .uk-select,
+        .uk-button-default {
+            background: var(--surface-background);
+            border: 1px solid var(--surface-border);
+            box-shadow: 0 18px 40px rgba(15, 23, 42, 0.08);
+        }
+
+        .uk-select,
+        .uk-button-default {
+            color: var(--text-color);
+        }
+
+        .uk-table thead th,
+        .uk-table td {
+            color: var(--text-color);
+            border-bottom-color: var(--surface-border);
+        }
+
+        .uk-table tbody tr:nth-child(even) {
+            background: var(--table-stripe);
+        }
+
+        .dashboard-header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 16px;
+            flex-wrap: wrap;
+        }
+
+        .theme-toggle {
+            border-radius: 999px;
+            padding: 8px 14px;
+        }
+
+        .chart-panel {
+            padding: 20px;
+            border-radius: 14px;
+            background: var(--surface-background);
+            border: 1px solid var(--surface-border);
+            box-shadow: 0 18px 40px rgba(15, 23, 42, 0.08);
+        }
+    </style>
 </head>
 <body>
 
 <div class="uk-container">
-    <h1 class="uk-heading-line"><span>Health Check Dashboard</span></h1>
+    <div class="dashboard-header">
+        <h1 class="uk-heading-line uk-margin-remove-bottom"><span>Health Check Dashboard</span></h1>
+        <button id="theme-toggle" type="button" class="uk-button uk-button-default theme-toggle">Dark Mode</button>
+    </div>
 
-    <!-- Stack Bar Chart -->
-    <div class="uk-margin-top" uk-grid>
+    <div class="uk-child-width-1-3@m uk-grid-small" uk-grid>
+        <div>
+            <div class="uk-card uk-card-default uk-card-body">
+                <p class="uk-text-meta uk-margin-remove-bottom">Tracked Services</p>
+                <h2 class="uk-margin-small-top uk-margin-remove-bottom">{{ tracked_services_count }}</h2>
+            </div>
+        </div>
+        <div>
+            <div class="uk-card uk-card-default uk-card-body">
+                <p class="uk-text-meta uk-margin-remove-bottom">Unhealthy Now</p>
+                <h2 class="uk-margin-small-top uk-margin-remove-bottom">{{ current_unhealthy_count }}</h2>
+            </div>
+        </div>
+        <div>
+            <div class="uk-card uk-card-default uk-card-body">
+                <p class="uk-text-meta uk-margin-remove-bottom">Recent Incidents</p>
+                <h2 class="uk-margin-small-top uk-margin-remove-bottom">{{ recent_incident_count }}</h2>
+            </div>
+        </div>
+    </div>
+
+    <div class="uk-margin-top chart-panel" uk-grid>
         <h2>URL Health by Project</h2>
         <canvas class="uk-align-center" id="healthChart" width="20vw" height="10vh"></canvas>
     </div>
 
-    <!-- Filters -->
     <form method="get" class="uk-grid-small" uk-grid>
         <div class="uk-width-1-4">
             <select name="project" class="uk-select">
@@ -46,7 +154,6 @@
         </div>
     </form>
 
-    <!-- Display URLs -->
     <table class="uk-table uk-table-divider uk-margin-top">
         <thead>
             <tr>
@@ -55,6 +162,8 @@
                 <th>URL</th>
                 <th>Last Checked</th>
                 <th>Status</th>
+                <th>24h Uptime</th>
+                <th>7d Uptime</th>
                 <th>Log</th>
             </tr>
         </thead>
@@ -72,11 +181,49 @@
                         <span class="uk-label uk-label-danger">Unhealthy</span>
                     {% endif %}
                 </td>
+                <td>{{ url.uptime_24h_display }}</td>
+                <td>{{ url.uptime_7d_display }}</td>
                 <td>{{ url.log|slice:":500" }}</td>
             </tr>
             {% empty %}
             <tr>
-                <td colspan="6" class="uk-text-center">No URLs found</td>
+                <td colspan="8" class="uk-text-center">No URLs found</td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+
+    <h2 class="uk-margin-large-top">Recent Incident History</h2>
+    <table class="uk-table uk-table-divider">
+        <thead>
+            <tr>
+                <th>Checked At</th>
+                <th>Project</th>
+                <th>Service</th>
+                <th>Status Code</th>
+                <th>Response Time</th>
+                <th>Log</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for incident in recent_incidents %}
+            <tr>
+                <td class="last-checked" data-datetime="{{ incident.checked_at|date:"c" }}"></td>
+                <td>{{ incident.url.project.name }}</td>
+                <td>{{ incident.url.name }}</td>
+                <td>{{ incident.status_code|default:"-" }}</td>
+                <td>
+                    {% if incident.response_time_ms %}
+                        {{ incident.response_time_ms }} ms
+                    {% else %}
+                        -
+                    {% endif %}
+                </td>
+                <td>{{ incident.log|slice:":500" }}</td>
+            </tr>
+            {% empty %}
+            <tr>
+                <td colspan="6" class="uk-text-center">No incidents recorded</td>
             </tr>
             {% endfor %}
         </tbody>
@@ -103,6 +250,21 @@ const unhealthyData = [
     {% endfor %}
 ];
 
+const themeToggleButton = document.getElementById('theme-toggle');
+
+function isDarkModeEnabled() {
+    return document.body.classList.contains('dark-mode');
+}
+
+function applyTheme(mode) {
+    const darkMode = mode === 'dark';
+    document.body.classList.toggle('dark-mode', darkMode);
+    themeToggleButton.textContent = darkMode ? 'Light Mode' : 'Dark Mode';
+}
+
+const savedTheme = localStorage.getItem('dashboard-theme');
+applyTheme(savedTheme === 'dark' ? 'dark' : 'light');
+
 // Render the stacked bar chart
 const ctx = document.getElementById('healthChart').getContext('2d');
 const healthChart = new Chart(ctx, {
@@ -128,23 +290,55 @@ const healthChart = new Chart(ctx, {
     },
     options: {
         responsive: true,
+        plugins: {
+            legend: {
+                labels: {
+                    color: '#1f2937'
+                }
+            }
+        },
         scales: {
             x: {
-                stacked: true
+                stacked: true,
+                ticks: {
+                    color: '#1f2937'
+                },
+                grid: {
+                    color: 'rgba(15, 23, 42, 0.08)'
+                }
             },
             y: {
                 stacked: true,
                 beginAtZero: true,
                 max: 100,  // Set max value to 100% since it's a percentage
                 ticks: {
+                    color: '#1f2937',
                     callback: function(value) {
                         return value + '%';  // Display percentage symbol
                     }
+                },
+                grid: {
+                    color: 'rgba(15, 23, 42, 0.08)'
                 }
             }
         }
     }
 });
+
+function syncChartTheme() {
+    const darkMode = isDarkModeEnabled();
+    const textColor = darkMode ? '#e5edf7' : '#1f2937';
+    const gridColor = darkMode ? 'rgba(148, 163, 184, 0.14)' : 'rgba(15, 23, 42, 0.08)';
+
+    healthChart.options.plugins.legend.labels.color = textColor;
+    healthChart.options.scales.x.ticks.color = textColor;
+    healthChart.options.scales.y.ticks.color = textColor;
+    healthChart.options.scales.x.grid.color = gridColor;
+    healthChart.options.scales.y.grid.color = gridColor;
+    healthChart.update();
+}
+
+syncChartTheme();
 
 document.addEventListener('DOMContentLoaded', function () {
     // Select all elements with the class 'last-checked'
@@ -161,6 +355,13 @@ document.addEventListener('DOMContentLoaded', function () {
         // Update the element's text content with the local time
         element.textContent = localDate;
     });
+});
+
+themeToggleButton.addEventListener('click', function() {
+    const nextTheme = isDarkModeEnabled() ? 'light' : 'dark';
+    localStorage.setItem('dashboard-theme', nextTheme);
+    applyTheme(nextTheme);
+    syncChartTheme();
 });
 </script>
 
