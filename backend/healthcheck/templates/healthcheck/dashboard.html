@@ -102,7 +102,14 @@
 <div class="uk-container">
     <div class="dashboard-header">
         <h1 class="uk-heading-line uk-margin-remove-bottom"><span>Health Check Dashboard</span></h1>
-        <button id="theme-toggle" type="button" class="uk-button uk-button-default theme-toggle">Dark Mode</button>
+        <div class="uk-flex uk-flex-middle uk-flex-wrap uk-grid-small" uk-grid>
+            <form method="post" action="{% url 'check_now' %}" class="uk-display-inline">
+                {% csrf_token %}
+                <input type="hidden" name="next" value="{{ request.get_full_path }}">
+                <button type="submit" class="uk-button uk-button-primary theme-toggle">Check Now</button>
+            </form>
+            <button id="theme-toggle" type="button" class="uk-button uk-button-default theme-toggle">Dark Mode</button>
+        </div>
     </div>
 
     <div class="uk-child-width-1-3@m uk-grid-small" uk-grid>
@@ -183,7 +190,18 @@
                 </td>
                 <td>{{ url.uptime_24h_display }}</td>
                 <td>{{ url.uptime_7d_display }}</td>
-                <td>{{ url.log|slice:":500" }}</td>
+                <td>
+                    <div class="uk-flex uk-flex-column uk-flex-middle uk-text-center uk-grid-small" uk-grid>
+                        <div>{{ url.log|slice:":500" }}</div>
+                        <div>
+                            <form method="post" action="{% url 'check_url_now' url.id %}">
+                                {% csrf_token %}
+                                <input type="hidden" name="next" value="{{ request.get_full_path }}">
+                                <button type="submit" class="uk-button uk-button-default uk-button-small">Check Now</button>
+                            </form>
+                        </div>
+                    </div>
+                </td>
             </tr>
             {% empty %}
             <tr>

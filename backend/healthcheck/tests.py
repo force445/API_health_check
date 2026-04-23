@@ -170,6 +170,23 @@ class DashboardViewTests(TestCase):
         self.assertEqual(response.context["current_unhealthy_count"], 1)
         self.assertEqual(response.context["recent_incident_count"], 2)
 
+    @patch("healthcheck.views.check_all_urls_health.delay")
+    def test_check_now_queues_global_health_check(self, mock_delay):
+        response = self.client.post(reverse("check_now"), {"next": reverse("dashboard")})
+
+        self.assertEqual(response.status_code, 302)
+        mock_delay.assert_called_once_with()
+
+    @patch("healthcheck.views.check_single_url_health.delay")
+    def test_check_now_queues_single_url_health_check(self, mock_delay):
+        response = self.client.post(
+            reverse("check_url_now", args=[self.url_a_healthy.id]),
+            {"next": reverse("dashboard")},
+        )
+
+        self.assertEqual(response.status_code, 302)
+        mock_delay.assert_called_once_with(self.url_a_healthy.id)
+
 
 class CheckAllUrlsHealthTaskTests(TestCase):
     def setUp(self):

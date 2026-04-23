@@ -1,9 +1,12 @@
 from datetime import timedelta
 
-from django.shortcuts import render
+from django.contrib import messages
+from django.shortcuts import redirect, render, get_object_or_404
+from django.urls import reverse
 from django.utils import timezone
 
 from . import models
+from .tasks import check_all_urls_health, check_single_url_health
 
 
 def _calculate_uptime(results):
@@ -90,3 +93,20 @@ def dashboard_view(request):
     }
 
     return render(request, 'healthcheck/dashboard.html', context)
+
+
+def trigger_check_now_view(request, url_id=None):
+    if request.method != "POST":
+        return redirect("dashboard")
+
+    next_url = request.POST.get("next") or reverse("dashboard")
+
+    if url_id is None:
+        check_all_urls_health.delay()
+        messages.success(request, "Queued a health check for all active services.")
+    else:
+        url = get_object_or_404(models.URL, id=url_id, is_use=True, project__is_use=True)
+        check_single_url_health.delay(url.id)
+        messages.success(request, f"Queued a health check for {url.name}.")
+
+    return redirect(next_url)
