@@ -155,4 +155,10 @@ CELERY_BEAT_SCHEDULE = {
         'task': 'healthcheck.tasks.check_all_urls_health',
         'schedule': int(os.environ.get('CELERY_SCHEDULE_TIME', 600))
     },
+    'cleanup_old_health_check_results_daily': {
+        'task': 'healthcheck.tasks.cleanup_health_check_results',
+        'schedule': int(os.environ.get('HEALTHCHECK_RESULT_CLEANUP_INTERVAL', 86400)),
+    },
 }
+
+HEALTHCHECK_RESULT_RETENTION_DAYS = int(os.environ.get('HEALTHCHECK_RESULT_RETENTION_DAYS', 30))

@@ -26,7 +26,7 @@ class URL(models.Model):
 
 class HealthCheckResult(models.Model):
     url = models.ForeignKey(URL, on_delete=models.CASCADE, related_name="health_check_results")
-    checked_at = models.DateTimeField()
+    checked_at = models.DateTimeField(db_index=True)
     is_healthy = models.BooleanField()
     status_code = models.PositiveSmallIntegerField(null=True, blank=True)
     response_time_ms = models.PositiveIntegerField(null=True, blank=True)

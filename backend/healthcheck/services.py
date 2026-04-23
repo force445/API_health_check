@@ -1,10 +1,14 @@
 from datetime import timedelta
 
+import os
+import time
+
+import requests
+from django.conf import settings
 from django.shortcuts import get_object_or_404
 from django.utils import timezone
 
 from . import models
-from .tasks import check_all_urls_health, check_single_url_health
 
 
 def calculate_uptime(results):
@@ -126,9 +130,71 @@ def build_dashboard_context(project_id, is_healthy):
 
 def queue_health_check(url_id=None):
     if url_id is None:
-        check_all_urls_health.delay()
+        run_all_active_health_checks()
         return None
 
     url = get_object_or_404(models.URL, id=url_id, is_use=True, project__is_use=True)
-    check_single_url_health.delay(url.id)
+    run_url_health_check(url)
     return url
+
+
+def run_url_health_check(url):
+    log = ""
+    status_code = None
+    response_time_ms = None
+
+    try:
+        started_at = time.monotonic()
+        response = requests.get(url.url, timeout=10, verify=False)
+        response_time_ms = round((time.monotonic() - started_at) * 1000)
+        status_code = response.status_code
+        log = response.text
+    except requests.RequestException as exc:
+        log = str(exc)
+
+    checked_at = timezone.now()
+    is_healthy = status_code is not None and status_code < 400
+
+    url.is_healthy = is_healthy
+    url.log = log
+    url.last_checked = checked_at
+    url.save(update_fields=["is_healthy", "log", "last_checked"])
+
+    models.HealthCheckResult.objects.create(
+        url=url,
+        checked_at=checked_at,
+        is_healthy=is_healthy,
+        status_code=status_code,
+        response_time_ms=response_time_ms,
+        log=log,
+    )
+
+    if not is_healthy and url.notify:
+        requests.post(
+            os.environ.get("CHAT_HOOK_URL"),
+            headers={"Content-Type": "application/json"},
+            json={
+                "text": f"""[error]
+project : {url.project.name}
+service : {url.name}
+url : {url.url}
+log : {url.log[:500]}"""
+            },
+        )
+
+
+def run_all_active_health_checks():
+    urls = models.URL.objects.filter(is_use=True, project__is_use=True).select_related("project")
+    for url in urls:
+        run_url_health_check(url)
+
+
+def cleanup_old_health_check_results(retention_days=None):
+    retention_days = retention_days if retention_days is not None else getattr(
+        settings,
+        "HEALTHCHECK_RESULT_RETENTION_DAYS",
+        30,
+    )
+    cutoff = timezone.now() - timedelta(days=retention_days)
+    deleted_count, _ = models.HealthCheckResult.objects.filter(checked_at__lt=cutoff).delete()
+    return deleted_count

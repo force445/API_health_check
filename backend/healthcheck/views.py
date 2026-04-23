@@ -21,8 +21,8 @@ def trigger_check_now_view(request, url_id=None):
     checked_url = services.queue_health_check(url_id)
 
     if checked_url is None:
-        messages.success(request, "Queued a health check for all active services.")
+        messages.success(request, "Ran a health check for all active services.")
     else:
-        messages.success(request, f"Queued a health check for {checked_url.name}.")
+        messages.success(request, f"Ran a health check for {checked_url.name}.")
 
     return redirect(next_url)

@@ -8,7 +8,8 @@ from django.urls import reverse
 from django.utils import timezone
 
 from .models import HealthCheckResult, Project, URL
-from .tasks import check_all_urls_health
+from .tasks import check_all_urls_health, cleanup_health_check_results
+from .services import cleanup_old_health_check_results
 
 
 class HealthcheckModelTests(TestCase):
@@ -170,22 +171,24 @@ class DashboardViewTests(TestCase):
         self.assertEqual(response.context["current_unhealthy_count"], 1)
         self.assertEqual(response.context["recent_incident_count"], 2)
 
-    @patch("healthcheck.services.check_all_urls_health.delay")
-    def test_check_now_queues_global_health_check(self, mock_delay):
+    @patch("healthcheck.services.run_all_active_health_checks")
+    def test_check_now_queues_global_health_check(self, mock_run_all):
         response = self.client.post(reverse("check_now"), {"next": reverse("dashboard")})
 
         self.assertEqual(response.status_code, 302)
-        mock_delay.assert_called_once_with()
+        mock_run_all.assert_called_once_with()
 
-    @patch("healthcheck.services.check_single_url_health.delay")
-    def test_check_now_queues_single_url_health_check(self, mock_delay):
+    @patch("healthcheck.services.run_url_health_check")
+    def test_check_now_queues_single_url_health_check(self, mock_run_url_health_check):
         response = self.client.post(
             reverse("check_url_now", args=[self.url_a_healthy.id]),
             {"next": reverse("dashboard")},
         )
 
         self.assertEqual(response.status_code, 302)
-        mock_delay.assert_called_once_with(self.url_a_healthy.id)
+        mock_run_url_health_check.assert_called_once()
+        called_url = mock_run_url_health_check.call_args.args[0]
+        self.assertEqual(called_url.id, self.url_a_healthy.id)
 
 
 class CheckAllUrlsHealthTaskTests(TestCase):
@@ -199,8 +202,8 @@ class CheckAllUrlsHealthTaskTests(TestCase):
         )
 
     @patch.dict(os.environ, {"CHAT_HOOK_URL": "https://chat.example.com/hook"}, clear=False)
-    @patch("healthcheck.tasks.requests.post")
-    @patch("healthcheck.tasks.requests.get")
+    @patch("healthcheck.services.requests.post")
+    @patch("healthcheck.services.requests.get")
     def test_marks_url_healthy_on_success(self, mock_get, mock_post):
         mock_get.return_value = Mock(status_code=200, text="ok")
 
@@ -218,8 +221,8 @@ class CheckAllUrlsHealthTaskTests(TestCase):
         mock_post.assert_not_called()
 
     @patch.dict(os.environ, {"CHAT_HOOK_URL": "https://chat.example.com/hook"}, clear=False)
-    @patch("healthcheck.tasks.requests.post")
-    @patch("healthcheck.tasks.requests.get")
+    @patch("healthcheck.services.requests.post")
+    @patch("healthcheck.services.requests.get")
     def test_sends_notification_when_url_is_unhealthy(self, mock_get, mock_post):
         mock_get.return_value = Mock(status_code=503, text="maintenance")
 
@@ -239,8 +242,8 @@ class CheckAllUrlsHealthTaskTests(TestCase):
         self.assertIn("log : maintenance", kwargs["json"]["text"])
 
     @patch.dict(os.environ, {"CHAT_HOOK_URL": "https://chat.example.com/hook"}, clear=False)
-    @patch("healthcheck.tasks.requests.post")
-    @patch("healthcheck.tasks.requests.get")
+    @patch("healthcheck.services.requests.post")
+    @patch("healthcheck.services.requests.get")
     def test_request_exception_marks_url_unhealthy_and_notifies(self, mock_get, mock_post):
         mock_get.side_effect = requests.RequestException("timed out")
 
@@ -257,8 +260,8 @@ class CheckAllUrlsHealthTaskTests(TestCase):
         mock_post.assert_called_once()
         self.assertIn("log : timed out", mock_post.call_args.kwargs["json"]["text"])
 
-    @patch("healthcheck.tasks.requests.post")
-    @patch("healthcheck.tasks.requests.get")
+    @patch("healthcheck.services.requests.post")
+    @patch("healthcheck.services.requests.get")
     def test_skips_notification_when_notify_is_disabled(self, mock_get, mock_post):
         self.url.notify = False
         self.url.save(update_fields=["notify"])
@@ -271,7 +274,7 @@ class CheckAllUrlsHealthTaskTests(TestCase):
         self.assertEqual(HealthCheckResult.objects.filter(url=self.url).count(), 1)
         mock_post.assert_not_called()
 
-    @patch("healthcheck.tasks.requests.get")
+    @patch("healthcheck.services.requests.get")
     def test_skips_disabled_urls_and_projects(self, mock_get):
         disabled_url = URL.objects.create(
             project=self.project,
@@ -301,3 +304,44 @@ class CheckAllUrlsHealthTaskTests(TestCase):
         self.assertEqual(project_url.last_checked, previous_project_url_checked)
         self.assertEqual(HealthCheckResult.objects.count(), 1)
         mock_get.assert_called_once_with(self.url.url, timeout=10, verify=False)
+
+
+class HealthCheckResultRetentionTests(TestCase):
+    def setUp(self):
+        self.project = Project.objects.create(name="Retention", is_use=True)
+        self.url = URL.objects.create(
+            project=self.project,
+            name="Service",
+            url="https://service.example.com/health",
+        )
+
+    def test_cleanup_old_health_check_results_deletes_stale_rows(self):
+        old_result = HealthCheckResult.objects.create(
+            url=self.url,
+            checked_at=timezone.now() - timedelta(days=40),
+            is_healthy=True,
+            status_code=200,
+            response_time_ms=100,
+            log="old",
+        )
+        recent_result = HealthCheckResult.objects.create(
+            url=self.url,
+            checked_at=timezone.now() - timedelta(days=5),
+            is_healthy=True,
+            status_code=200,
+            response_time_ms=90,
+            log="recent",
+        )
+
+        deleted_count = cleanup_old_health_check_results(retention_days=30)
+
+        self.assertEqual(deleted_count, 1)
+        self.assertFalse(HealthCheckResult.objects.filter(id=old_result.id).exists())
+        self.assertTrue(HealthCheckResult.objects.filter(id=recent_result.id).exists())
+
+    def test_cleanup_health_check_results_task_uses_service_default(self):
+        with patch("healthcheck.tasks.cleanup_old_health_check_results", return_value=3) as mock_cleanup:
+            result = cleanup_health_check_results()
+
+        self.assertEqual(result, 3)
+        mock_cleanup.assert_called_once_with()
