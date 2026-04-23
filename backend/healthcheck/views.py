@@ -18,6 +18,82 @@ def _calculate_uptime(results):
     return round((healthy_checks / total_checks) * 100, 1)
 
 
+def _get_active_urls_queryset():
+    return (
+        models.URL.objects.filter(project__is_use=True)
+        .select_related("project")
+        .prefetch_related("health_check_results")
+        .order_by("project__name", "name")
+    )
+
+
+def _filter_urls_queryset(urls_queryset, project_id, is_healthy):
+    if project_id:
+        urls_queryset = urls_queryset.filter(project_id=project_id)
+
+    if is_healthy in {"true", "false"}:
+        urls_queryset = urls_queryset.filter(is_healthy=is_healthy == "true")
+
+    return urls_queryset
+
+
+def _group_urls_by_project(urls):
+    grouped_urls = {}
+    for url in urls:
+        grouped_urls.setdefault(url.project_id, []).append(url)
+    return grouped_urls
+
+
+def _build_project_health_data(projects, urls_by_project):
+    project_health_data = []
+    for project in projects:
+        project_urls = urls_by_project.get(project.id, [])
+        total_urls = len(project_urls)
+
+        if total_urls:
+            healthy_count = sum(1 for url in project_urls if url.is_healthy)
+            healthy_percentage = (healthy_count / total_urls) * 100
+            unhealthy_percentage = 100 - healthy_percentage
+        else:
+            healthy_percentage = 0
+            unhealthy_percentage = 0
+
+        project_health_data.append(
+            {
+                "project_name": project.name,
+                "healthy_percentage": healthy_percentage,
+                "unhealthy_percentage": unhealthy_percentage,
+            }
+        )
+
+    return project_health_data
+
+
+def _annotate_urls_for_dashboard(urls, last_24_hours, last_7_days):
+    for url in urls:
+        history = list(url.health_check_results.all())
+        recent_24h = [result for result in history if result.checked_at >= last_24_hours]
+        recent_7d = [result for result in history if result.checked_at >= last_7_days]
+
+        url.uptime_24h = _calculate_uptime(recent_24h)
+        url.uptime_7d = _calculate_uptime(recent_7d)
+        url.uptime_24h_display = "No data" if url.uptime_24h is None else f"{url.uptime_24h}%"
+        url.uptime_7d_display = "No data" if url.uptime_7d is None else f"{url.uptime_7d}%"
+        url.last_incident = next((result for result in history if not result.is_healthy), None)
+
+
+def _get_recent_incidents_queryset(project_id):
+    recent_incidents_queryset = models.HealthCheckResult.objects.filter(
+        url__project__is_use=True,
+        is_healthy=False,
+    )
+
+    if project_id:
+        recent_incidents_queryset = recent_incidents_queryset.filter(url__project_id=project_id)
+
+    return recent_incidents_queryset
+
+
 def dashboard_view(request):
     project_id = request.GET.get('project')
     is_healthy = request.GET.get('is_healthy')
@@ -25,59 +101,18 @@ def dashboard_view(request):
     last_24_hours = now - timedelta(hours=24)
     last_7_days = now - timedelta(days=7)
 
-    active_urls = list(
-        models.URL.objects.filter(project__is_use=True)
-        .select_related("project")
-        .prefetch_related("health_check_results")
-        .order_by("project__name", "name")
-    )
+    active_urls_queryset = _get_active_urls_queryset()
+    urls_queryset = _filter_urls_queryset(active_urls_queryset, project_id, is_healthy)
+    urls = list(urls_queryset)
+    active_urls = list(active_urls_queryset)
 
-    urls = list(active_urls)
+    projects = models.Project.objects.filter(is_use=True).order_by("name")
+    urls_by_project = _group_urls_by_project(active_urls)
 
-    if project_id:
-        urls = [url for url in urls if str(url.project_id) == project_id]
+    project_health_data = _build_project_health_data(projects, urls_by_project)
+    _annotate_urls_for_dashboard(urls, last_24_hours, last_7_days)
 
-    if is_healthy:
-        is_healthy_bool = True if is_healthy == 'true' else False
-        urls = [url for url in urls if url.is_healthy == is_healthy_bool]
-
-    projects = models.Project.objects.filter(is_use=True)
-
-    project_health_data = []
-    for project in projects:
-        project_urls = [url for url in active_urls if url.project_id == project.id]
-        total_urls = len(project_urls)
-        if total_urls > 0:
-            healthy_count = sum(1 for url in project_urls if url.is_healthy)
-            unhealthy_count = total_urls - healthy_count
-            healthy_percentage = (healthy_count / total_urls) * 100
-            unhealthy_percentage = (unhealthy_count / total_urls) * 100
-        else:
-            healthy_percentage = 0
-            unhealthy_percentage = 0
-        
-        project_health_data.append({
-            'project_name': project.name,
-            'healthy_percentage': healthy_percentage,
-            'unhealthy_percentage': unhealthy_percentage
-        })
-
-    for url in urls:
-        history = list(url.health_check_results.all())
-        recent_24h = [result for result in history if result.checked_at >= last_24_hours]
-        recent_7d = [result for result in history if result.checked_at >= last_7_days]
-        url.uptime_24h = _calculate_uptime(recent_24h)
-        url.uptime_7d = _calculate_uptime(recent_7d)
-        url.uptime_24h_display = "No data" if url.uptime_24h is None else f"{url.uptime_24h}%"
-        url.uptime_7d_display = "No data" if url.uptime_7d is None else f"{url.uptime_7d}%"
-        url.last_incident = next((result for result in history if not result.is_healthy), None)
-
-    recent_incidents_query = models.HealthCheckResult.objects.filter(
-        url__project__is_use=True,
-        is_healthy=False,
-    )
-    if project_id:
-        recent_incidents_query = recent_incidents_query.filter(url__project_id=project_id)
+    recent_incidents_query = _get_recent_incidents_queryset(project_id)
     recent_incidents = recent_incidents_query.select_related("url", "url__project")[:10]
 
     context = {

@@ -60,6 +60,28 @@
             box-shadow: 0 18px 40px rgba(15, 23, 42, 0.08);
         }
 
+        .dashboard-card {
+            position: relative;
+            overflow: hidden;
+            transition: transform 0.2s ease, box-shadow 0.2s ease, background 0.2s ease;
+        }
+
+        .dashboard-card::before {
+            content: "";
+            position: absolute;
+            inset: 0;
+            background: linear-gradient(135deg, rgba(30, 135, 240, 0.08), rgba(15, 23, 42, 0));
+            pointer-events: none;
+        }
+
+        body.dark-mode .dashboard-card::before {
+            background: linear-gradient(135deg, rgba(56, 189, 248, 0.14), rgba(15, 23, 42, 0));
+        }
+
+        .dashboard-card:hover {
+            transform: translateY(-2px);
+        }
+
         .uk-select,
         .uk-button-default {
             color: var(--text-color);
@@ -114,19 +136,19 @@
 
     <div class="uk-child-width-1-3@m uk-grid-small" uk-grid>
         <div>
-            <div class="uk-card uk-card-default uk-card-body">
+            <div class="uk-card uk-card-default uk-card-body dashboard-card">
                 <p class="uk-text-meta uk-margin-remove-bottom">Tracked Services</p>
                 <h2 class="uk-margin-small-top uk-margin-remove-bottom">{{ tracked_services_count }}</h2>
             </div>
         </div>
         <div>
-            <div class="uk-card uk-card-default uk-card-body">
+            <div class="uk-card uk-card-default uk-card-body dashboard-card">
                 <p class="uk-text-meta uk-margin-remove-bottom">Unhealthy Now</p>
                 <h2 class="uk-margin-small-top uk-margin-remove-bottom">{{ current_unhealthy_count }}</h2>
             </div>
         </div>
         <div>
-            <div class="uk-card uk-card-default uk-card-body">
+            <div class="uk-card uk-card-default uk-card-body dashboard-card">
                 <p class="uk-text-meta uk-margin-remove-bottom">Recent Incidents</p>
                 <h2 class="uk-margin-small-top uk-margin-remove-bottom">{{ recent_incident_count }}</h2>
             </div>
