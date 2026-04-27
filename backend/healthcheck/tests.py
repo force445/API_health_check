@@ -259,6 +259,27 @@ class CheckAllUrlsHealthTaskTests(TestCase):
         self.assertIsNone(result.response_time_ms)
         mock_post.assert_called_once()
         self.assertIn("log : timed out", mock_post.call_args.kwargs["json"]["text"])
+        self.assertEqual(mock_get.call_count, 2)
+
+    @patch.dict(os.environ, {"CHAT_HOOK_URL": "https://chat.example.com/hook"}, clear=False)
+    @patch("healthcheck.services.requests.post")
+    @patch("healthcheck.services.requests.get")
+    def test_transient_request_exception_retries_before_alerting(self, mock_get, mock_post):
+        mock_get.side_effect = [
+            requests.ReadTimeout("read timed out"),
+            Mock(status_code=200, text="ok"),
+        ]
+
+        check_all_urls_health()
+
+        self.url.refresh_from_db()
+        result = HealthCheckResult.objects.get(url=self.url)
+        self.assertTrue(self.url.is_healthy)
+        self.assertTrue(result.is_healthy)
+        self.assertEqual(result.status_code, 200)
+        self.assertEqual(result.log, "ok")
+        self.assertEqual(mock_get.call_count, 2)
+        mock_post.assert_not_called()
 
     @patch("healthcheck.services.requests.post")
     @patch("healthcheck.services.requests.get")

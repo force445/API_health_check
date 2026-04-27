@@ -142,15 +142,21 @@ def run_url_health_check(url):
     log = ""
     status_code = None
     response_time_ms = None
+    request_timeout = getattr(settings, "HEALTHCHECK_REQUEST_TIMEOUT_SECONDS", 10)
+    request_attempts = max(1, getattr(settings, "HEALTHCHECK_REQUEST_ATTEMPTS", 2))
 
-    try:
-        started_at = time.monotonic()
-        response = requests.get(url.url, timeout=10, verify=False)
-        response_time_ms = round((time.monotonic() - started_at) * 1000)
-        status_code = response.status_code
-        log = response.text
-    except requests.RequestException as exc:
-        log = str(exc)
+    for attempt in range(1, request_attempts + 1):
+        try:
+            started_at = time.monotonic()
+            response = requests.get(url.url, timeout=request_timeout, verify=False)
+            response_time_ms = round((time.monotonic() - started_at) * 1000)
+            status_code = response.status_code
+            log = response.text
+            break
+        except requests.RequestException as exc:
+            log = str(exc)
+            if attempt < request_attempts:
+                continue
 
     checked_at = timezone.now()
     is_healthy = status_code is not None and status_code < 400
