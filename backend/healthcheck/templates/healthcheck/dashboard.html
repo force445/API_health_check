@@ -141,6 +141,11 @@
                 <input type="hidden" name="next" value="{{ request.get_full_path }}">
                 <button type="submit" class="uk-button uk-button-primary theme-toggle">Check Now</button>
             </form>
+            <form method="post" action="{% url 'admin:logout' %}" class="uk-display-inline">
+                {% csrf_token %}
+                <input type="hidden" name="next" value="{% url 'admin:login' %}">
+                <button type="submit" class="uk-button uk-button-default theme-toggle">Logout</button>
+            </form>
             <button id="theme-toggle" type="button" class="uk-button uk-button-default theme-toggle">Dark Mode</button>
         </div>
     </div>

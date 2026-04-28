@@ -3,6 +3,7 @@ from datetime import timedelta
 from unittest.mock import Mock, patch
 
 import requests
+from django.contrib.auth import get_user_model
 from django.test import TestCase
 from django.urls import reverse
 from django.utils import timezone
@@ -42,6 +43,11 @@ class HealthcheckModelTests(TestCase):
 
 class DashboardViewTests(TestCase):
     def setUp(self):
+        self.staff_user = get_user_model().objects.create_user(
+            username="admin",
+            password="password123",
+            is_staff=True,
+        )
         self.project_a = Project.objects.create(name="Project A", is_use=True)
         self.project_b = Project.objects.create(name="Project B", is_use=True)
         self.disabled_project = Project.objects.create(name="Disabled", is_use=False)
@@ -115,7 +121,17 @@ class DashboardViewTests(TestCase):
             log="ok",
         )
 
+    def login(self):
+        self.client.force_login(self.staff_user)
+
+    def test_dashboard_requires_staff_login(self):
+        response = self.client.get(reverse("dashboard"))
+
+        self.assertEqual(response.status_code, 302)
+        self.assertRedirects(response, f"{reverse('admin:login')}?next={reverse('dashboard')}")
+
     def test_dashboard_excludes_urls_from_disabled_projects(self):
+        self.login()
         response = self.client.get(reverse("dashboard"))
 
         self.assertEqual(response.status_code, 200)
@@ -125,17 +141,27 @@ class DashboardViewTests(TestCase):
         )
         self.assertNotContains(response, "Disabled URL")
 
+    def test_dashboard_shows_logout_button(self):
+        self.login()
+        response = self.client.get(reverse("dashboard"))
+
+        self.assertContains(response, 'action="/admin/logout/"', html=False)
+        self.assertContains(response, "Logout")
+
     def test_dashboard_filters_by_project(self):
+        self.login()
         response = self.client.get(reverse("dashboard"), {"project": self.project_a.id})
 
         self.assertEqual(list(response.context["urls"]), [self.url_a_healthy, self.url_a_unhealthy])
 
     def test_dashboard_filters_by_health_status(self):
+        self.login()
         response = self.client.get(reverse("dashboard"), {"is_healthy": "false"})
 
         self.assertEqual(list(response.context["urls"]), [self.url_a_unhealthy])
 
     def test_dashboard_filters_by_tag(self):
+        self.login()
         response = self.client.get(reverse("dashboard"), {"tag": "staging"})
 
         self.assertEqual(list(response.context["urls"]), [self.url_a_unhealthy])
@@ -143,6 +169,7 @@ class DashboardViewTests(TestCase):
         self.assertEqual(list(response.context["tags"]), ["production", "staging"])
 
     def test_dashboard_builds_project_health_percentages(self):
+        self.login()
         response = self.client.get(reverse("dashboard"))
 
         self.assertEqual(
@@ -162,6 +189,7 @@ class DashboardViewTests(TestCase):
         )
 
     def test_dashboard_adds_uptime_percentages_from_history(self):
+        self.login()
         response = self.client.get(reverse("dashboard"))
 
         urls_by_name = {url.name: url for url in response.context["urls"]}
@@ -172,6 +200,7 @@ class DashboardViewTests(TestCase):
         self.assertEqual(urls_by_name["Project B URL"].uptime_7d, None)
 
     def test_dashboard_exposes_trend_chart_data(self):
+        self.login()
         response = self.client.get(reverse("dashboard"), {"tag": "production"})
 
         trend_data = {
@@ -184,6 +213,7 @@ class DashboardViewTests(TestCase):
         self.assertEqual(trend_data["Healthy URL"]["response_times"], [95, 100, 200])
 
     def test_dashboard_exposes_recent_incidents(self):
+        self.login()
         response = self.client.get(reverse("dashboard"))
 
         recent_incidents = list(response.context["recent_incidents"])
@@ -195,13 +225,21 @@ class DashboardViewTests(TestCase):
 
     @patch("healthcheck.services.run_all_active_health_checks")
     def test_check_now_queues_global_health_check(self, mock_run_all):
+        self.login()
         response = self.client.post(reverse("check_now"), {"next": reverse("dashboard")})
 
         self.assertEqual(response.status_code, 302)
         mock_run_all.assert_called_once_with()
 
+    def test_check_now_requires_staff_login(self):
+        response = self.client.post(reverse("check_now"), {"next": reverse("dashboard")})
+
+        self.assertEqual(response.status_code, 302)
+        self.assertRedirects(response, f"{reverse('admin:login')}?next={reverse('check_now')}")
+
     @patch("healthcheck.services.run_url_health_check")
     def test_check_now_queues_single_url_health_check(self, mock_run_url_health_check):
+        self.login()
         response = self.client.post(
             reverse("check_url_now", args=[self.url_a_healthy.id]),
             {"next": reverse("dashboard")},

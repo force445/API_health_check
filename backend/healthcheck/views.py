@@ -1,10 +1,12 @@
 from django.contrib import messages
+from django.contrib.admin.views.decorators import staff_member_required
 from django.shortcuts import redirect, render
 from django.urls import reverse
 
 from . import services
 
 
+@staff_member_required(login_url="admin:login")
 def dashboard_view(request):
     context = services.build_dashboard_context(
         request.GET.get("project"),
@@ -14,6 +16,7 @@ def dashboard_view(request):
     return render(request, "healthcheck/dashboard.html", context)
 
 
+@staff_member_required(login_url="admin:login")
 def trigger_check_now_view(request, url_id=None):
     if request.method != "POST":
         return redirect("dashboard")
