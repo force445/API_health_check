@@ -11,8 +11,8 @@ admin.site.register(models.Project, ProjectAdmin)
 
 class URLAdmin(admin.ModelAdmin):
     list_display = [f.name for f in models.URL._meta.fields if f.name not in ['log']]
-    search_fields = ['project__name']
-    list_filter = ['is_healthy', 'project__name']
+    search_fields = ['project__name', 'name', 'url', 'tag']
+    list_filter = ['is_healthy', 'tag', 'project__name']
     autocomplete_fields = ['project']
 admin.site.register(models.URL, URLAdmin)
 

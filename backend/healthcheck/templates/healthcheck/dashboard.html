@@ -117,6 +117,17 @@
             border: 1px solid var(--surface-border);
             box-shadow: 0 18px 40px rgba(15, 23, 42, 0.08);
         }
+
+        .tag-label {
+            background: rgba(30, 135, 240, 0.14);
+            color: var(--text-color);
+            border: 1px solid var(--surface-border);
+        }
+
+        .trend-modal-body {
+            background: var(--surface-background);
+            color: var(--text-color);
+        }
     </style>
 </head>
 <body>
@@ -179,6 +190,16 @@
             </select>
         </div>
         <div class="uk-width-1-4">
+            <select name="tag" class="uk-select">
+                <option value="">All Tags</option>
+                {% for tag in tags %}
+                <option value="{{ tag }}" {% if selected_tag == tag %}selected{% endif %}>
+                    {{ tag }}
+                </option>
+                {% endfor %}
+            </select>
+        </div>
+        <div class="uk-width-1-4">
             <button type="submit" class="uk-button uk-button-primary">Filter</button>
         </div>
     </form>
@@ -187,12 +208,14 @@
         <thead>
             <tr>
                 <th>Project</th>
+                <th>Tag</th>
                 <th>Name</th>
                 <th>URL</th>
                 <th>Last Checked</th>
                 <th>Status</th>
                 <th>24h Uptime</th>
                 <th>7d Uptime</th>
+                <th>Trend</th>
                 <th>Log</th>
             </tr>
         </thead>
@@ -200,6 +223,13 @@
             {% for url in urls %}
             <tr>
                 <td>{{ url.project.name }}</td>
+                <td>
+                    {% if url.tag %}
+                        <span class="uk-label tag-label">{{ url.tag }}</span>
+                    {% else %}
+                        <span class="uk-text-muted">-</span>
+                    {% endif %}
+                </td>
                 <td>{{ url.name }}</td>
                 <td><a href="{{ url.url }}" target="_blank">{{ url.url }}</a></td>
                 <td class="last-checked" data-datetime="{{ url.last_checked|date:"c" }}"></td>
@@ -212,6 +242,15 @@
                 </td>
                 <td>{{ url.uptime_24h_display }}</td>
                 <td>{{ url.uptime_7d_display }}</td>
+                <td>
+                    <button
+                        type="button"
+                        class="uk-button uk-button-default uk-button-small trend-button"
+                        data-trend-url-id="{{ url.id }}"
+                    >
+                        Trend
+                    </button>
+                </td>
                 <td>
                     <div class="uk-flex uk-flex-column uk-flex-middle uk-text-center uk-grid-small" uk-grid>
                         <div>{{ url.log|slice:":500" }}</div>
@@ -227,7 +266,7 @@
             </tr>
             {% empty %}
             <tr>
-                <td colspan="8" class="uk-text-center">No URLs found</td>
+                <td colspan="10" class="uk-text-center">No URLs found</td>
             </tr>
             {% endfor %}
         </tbody>
@@ -270,6 +309,16 @@
     </table>
 </div>
 
+<div id="trend-modal" uk-modal>
+    <div class="uk-modal-dialog uk-modal-body trend-modal-body">
+        <button class="uk-modal-close-default" type="button" uk-close></button>
+        <h2 id="trend-modal-title" class="uk-modal-title">Service Trend</h2>
+        <canvas id="trendChart" height="120"></canvas>
+    </div>
+</div>
+
+{{ trend_chart_data|json_script:"trend-chart-data" }}
+
 <script>
 // Prepare data for the chart
 const labels = [
@@ -290,7 +339,12 @@ const unhealthyData = [
     {% endfor %}
 ];
 
+const trendChartData = JSON.parse(document.getElementById('trend-chart-data').textContent);
+const trendDataByUrlId = new Map(trendChartData.map(function(item) {
+    return [String(item.url_id), item];
+}));
 const themeToggleButton = document.getElementById('theme-toggle');
+let trendChart = null;
 
 function isDarkModeEnabled() {
     return document.body.classList.contains('dark-mode');
@@ -365,17 +419,141 @@ const healthChart = new Chart(ctx, {
     }
 });
 
-function syncChartTheme() {
+function getChartThemeColors() {
     const darkMode = isDarkModeEnabled();
-    const textColor = darkMode ? '#e5edf7' : '#1f2937';
-    const gridColor = darkMode ? 'rgba(148, 163, 184, 0.14)' : 'rgba(15, 23, 42, 0.08)';
+    return {
+        textColor: darkMode ? '#e5edf7' : '#1f2937',
+        gridColor: darkMode ? 'rgba(148, 163, 184, 0.14)' : 'rgba(15, 23, 42, 0.08)'
+    };
+}
 
-    healthChart.options.plugins.legend.labels.color = textColor;
-    healthChart.options.scales.x.ticks.color = textColor;
-    healthChart.options.scales.y.ticks.color = textColor;
-    healthChart.options.scales.x.grid.color = gridColor;
-    healthChart.options.scales.y.grid.color = gridColor;
+function formatTrendLabel(value) {
+    if (!value) {
+        return '-';
+    }
+
+    return new Date(value).toLocaleString();
+}
+
+function renderTrendChart(trendData) {
+    const trendCtx = document.getElementById('trendChart').getContext('2d');
+    const colors = getChartThemeColors();
+    const labels = trendData.labels.map(formatTrendLabel);
+
+    if (trendChart) {
+        trendChart.destroy();
+    }
+
+    document.getElementById('trend-modal-title').textContent = `${trendData.project_name} / ${trendData.service_name}`;
+
+    trendChart = new Chart(trendCtx, {
+        type: 'line',
+        data: {
+            labels: labels,
+            datasets: [
+                {
+                    label: 'Healthy',
+                    data: trendData.statuses,
+                    borderColor: 'rgba(40, 167, 69, 1)',
+                    backgroundColor: 'rgba(40, 167, 69, 0.12)',
+                    stepped: true,
+                    yAxisID: 'status',
+                    tension: 0
+                },
+                {
+                    label: 'Response Time (ms)',
+                    data: trendData.response_times,
+                    borderColor: 'rgba(30, 135, 240, 1)',
+                    backgroundColor: 'rgba(30, 135, 240, 0.12)',
+                    yAxisID: 'responseTime',
+                    tension: 0.25
+                }
+            ]
+        },
+        options: {
+            responsive: true,
+            interaction: {
+                mode: 'index',
+                intersect: false
+            },
+            plugins: {
+                legend: {
+                    labels: {
+                        color: colors.textColor
+                    }
+                },
+                tooltip: {
+                    callbacks: {
+                        label: function(context) {
+                            if (context.dataset.yAxisID === 'status') {
+                                return context.parsed.y === 1 ? 'Healthy' : 'Unhealthy';
+                            }
+
+                            return context.parsed.y === null ? 'No response time' : `${context.parsed.y} ms`;
+                        }
+                    }
+                }
+            },
+            scales: {
+                x: {
+                    ticks: {
+                        color: colors.textColor,
+                        maxRotation: 45,
+                        minRotation: 0
+                    },
+                    grid: {
+                        color: colors.gridColor
+                    }
+                },
+                status: {
+                    position: 'left',
+                    min: 0,
+                    max: 1,
+                    ticks: {
+                        color: colors.textColor,
+                        stepSize: 1,
+                        callback: function(value) {
+                            return value === 1 ? 'Healthy' : 'Unhealthy';
+                        }
+                    },
+                    grid: {
+                        color: colors.gridColor
+                    }
+                },
+                responseTime: {
+                    position: 'right',
+                    beginAtZero: true,
+                    ticks: {
+                        color: colors.textColor
+                    },
+                    grid: {
+                        drawOnChartArea: false
+                    }
+                }
+            }
+        }
+    });
+}
+
+function syncChartTheme() {
+    const colors = getChartThemeColors();
+
+    healthChart.options.plugins.legend.labels.color = colors.textColor;
+    healthChart.options.scales.x.ticks.color = colors.textColor;
+    healthChart.options.scales.y.ticks.color = colors.textColor;
+    healthChart.options.scales.x.grid.color = colors.gridColor;
+    healthChart.options.scales.y.grid.color = colors.gridColor;
     healthChart.update();
+
+    if (trendChart) {
+        trendChart.options.plugins.legend.labels.color = colors.textColor;
+        trendChart.options.scales.x.ticks.color = colors.textColor;
+        trendChart.options.scales.status.ticks.color = colors.textColor;
+        trendChart.options.scales.responseTime.ticks.color = colors.textColor;
+        trendChart.options.scales.x.grid.color = colors.gridColor;
+        trendChart.options.scales.status.grid.color = colors.gridColor;
+        trendChart.update();
+    }
 }
 
 syncChartTheme();
@@ -389,11 +567,27 @@ document.addEventListener('DOMContentLoaded', function () {
         // Get the datetime from the data attribute
         const utcDate = element.getAttribute('data-datetime');
         
-        // Convert to local time
+        if (!utcDate) {
+            element.textContent = '-';
+            return;
+        }
+
         const localDate = new Date(utcDate).toLocaleString();
 
         // Update the element's text content with the local time
         element.textContent = localDate;
+    });
+
+    document.querySelectorAll('.trend-button').forEach(function(button) {
+        button.addEventListener('click', function() {
+            const trendData = trendDataByUrlId.get(button.getAttribute('data-trend-url-id'));
+            if (!trendData) {
+                return;
+            }
+
+            renderTrendChart(trendData);
+            UIkit.modal('#trend-modal').show();
+        });
     });
 });
 

@@ -29,12 +29,15 @@ def get_active_urls_queryset():
     )
 
 
-def filter_urls_queryset(urls_queryset, project_id, is_healthy):
+def filter_urls_queryset(urls_queryset, project_id, is_healthy, tag):
     if project_id:
         urls_queryset = urls_queryset.filter(project_id=project_id)
 
     if is_healthy in {"true", "false"}:
         urls_queryset = urls_queryset.filter(is_healthy=is_healthy == "true")
+
+    if tag:
+        urls_queryset = urls_queryset.filter(tag=tag)
 
     return urls_queryset
 
@@ -96,13 +99,47 @@ def get_recent_incidents_queryset(project_id):
     return recent_incidents_queryset
 
 
-def build_dashboard_context(project_id, is_healthy):
+def get_available_tags():
+    return (
+        models.URL.objects.filter(project__is_use=True)
+        .exclude(tag="")
+        .order_by("tag")
+        .values_list("tag", flat=True)
+        .distinct()
+    )
+
+
+def build_trend_chart_data(urls):
+    trend_chart_data = []
+
+    for url in urls:
+        recent_results = list(url.health_check_results.all()[:20])
+        recent_results.reverse()
+
+        trend_chart_data.append(
+            {
+                "url_id": url.id,
+                "service_name": url.name,
+                "project_name": url.project.name,
+                "labels": [result.checked_at.isoformat() for result in recent_results],
+                "statuses": [1 if result.is_healthy else 0 for result in recent_results],
+                "response_times": [
+                    result.response_time_ms if result.response_time_ms is not None else None
+                    for result in recent_results
+                ],
+            }
+        )
+
+    return trend_chart_data
+
+
+def build_dashboard_context(project_id, is_healthy, tag=None):
     now = timezone.now()
     last_24_hours = now - timedelta(hours=24)
     last_7_days = now - timedelta(days=7)
 
     active_urls_queryset = get_active_urls_queryset()
-    urls_queryset = filter_urls_queryset(active_urls_queryset, project_id, is_healthy)
+    urls_queryset = filter_urls_queryset(active_urls_queryset, project_id, is_healthy, tag)
     urls = list(urls_queryset)
     active_urls = list(active_urls_queryset)
 
@@ -118,9 +155,12 @@ def build_dashboard_context(project_id, is_healthy):
     return {
         "urls": urls,
         "projects": projects,
+        "tags": get_available_tags(),
         "selected_project": project_id,
         "selected_health": is_healthy,
+        "selected_tag": tag,
         "project_health_data": project_health_data,
+        "trend_chart_data": build_trend_chart_data(urls),
         "recent_incidents": recent_incidents,
         "tracked_services_count": len(urls),
         "current_unhealthy_count": sum(1 for url in urls if not url.is_healthy),

@@ -49,18 +49,21 @@ class DashboardViewTests(TestCase):
         self.url_a_healthy = URL.objects.create(
             project=self.project_a,
             name="Healthy URL",
+            tag="production",
             url="https://example.com/healthy",
             is_healthy=True,
         )
         self.url_a_unhealthy = URL.objects.create(
             project=self.project_a,
             name="Unhealthy URL",
+            tag="staging",
             url="https://example.com/unhealthy",
             is_healthy=False,
         )
         self.url_b = URL.objects.create(
             project=self.project_b,
             name="Project B URL",
+            tag="production",
             url="https://example.org/status",
             is_healthy=True,
         )
@@ -132,6 +135,13 @@ class DashboardViewTests(TestCase):
 
         self.assertEqual(list(response.context["urls"]), [self.url_a_unhealthy])
 
+    def test_dashboard_filters_by_tag(self):
+        response = self.client.get(reverse("dashboard"), {"tag": "staging"})
+
+        self.assertEqual(list(response.context["urls"]), [self.url_a_unhealthy])
+        self.assertEqual(response.context["selected_tag"], "staging")
+        self.assertEqual(list(response.context["tags"]), ["production", "staging"])
+
     def test_dashboard_builds_project_health_percentages(self):
         response = self.client.get(reverse("dashboard"))
 
@@ -160,6 +170,18 @@ class DashboardViewTests(TestCase):
         self.assertEqual(urls_by_name["Unhealthy URL"].uptime_24h, 0.0)
         self.assertEqual(urls_by_name["Project B URL"].uptime_24h, None)
         self.assertEqual(urls_by_name["Project B URL"].uptime_7d, None)
+
+    def test_dashboard_exposes_trend_chart_data(self):
+        response = self.client.get(reverse("dashboard"), {"tag": "production"})
+
+        trend_data = {
+            item["service_name"]: item
+            for item in response.context["trend_chart_data"]
+        }
+        self.assertEqual(set(trend_data), {"Healthy URL", "Project B URL"})
+        self.assertEqual(trend_data["Healthy URL"]["project_name"], "Project A")
+        self.assertEqual(trend_data["Healthy URL"]["statuses"], [1, 1, 0])
+        self.assertEqual(trend_data["Healthy URL"]["response_times"], [95, 100, 200])
 
     def test_dashboard_exposes_recent_incidents(self):
         response = self.client.get(reverse("dashboard"))

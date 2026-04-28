@@ -12,6 +12,7 @@ class Project(models.Model):
 class URL(models.Model):
     project = models.ForeignKey(Project, on_delete=models.CASCADE)
     name = models.CharField(max_length=100)
+    tag = models.CharField(max_length=50, blank=True, default="", db_index=True)
     url = models.URLField(unique=True)
     last_checked = models.DateTimeField(null=True, blank=True)
     is_healthy = models.BooleanField(default=False)

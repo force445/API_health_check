@@ -9,6 +9,7 @@ def dashboard_view(request):
     context = services.build_dashboard_context(
         request.GET.get("project"),
         request.GET.get("is_healthy"),
+        request.GET.get("tag"),
     )
     return render(request, "healthcheck/dashboard.html", context)
 
